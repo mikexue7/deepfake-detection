@@ -5,13 +5,24 @@ import json
 # os.environ["IMAGEIO_FFMPEG_EXE"] = "/Users/michaelxue/anaconda3/lib/python3.9/site-packages/ffmpeg/"
 # from moviepy.editor import AudioFileClip
 
-TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
+import pdb
+import resource
 
-def load_frames(filepath):
+TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
+ASPECT_RATIO = 16 / 9 # 1920 / 1080
+
+def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
     # Open the video file
     cap = cv2.VideoCapture(filepath)
-    frames = []
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    aspect_ratio = width / height
+    # for now, we only keep videos with aspect ratio of 16:9; this is the majority of videos
+    if aspect_ratio != ASPECT_RATIO:
+        return None
 
+    frames = []
+    counter = 0
     # Loop through the video frames
     while True:
         # Read a frame from the video
@@ -21,32 +32,63 @@ def load_frames(filepath):
         if not ret:
             break
 
-        frames.append(np.expand_dims(frame, axis=0))
+        # keep every fr_downsample_factor frame
+        if counter % fr_downsample_factor == 0:
+            new_height = frame.shape[0] // img_downsample_factor
+            new_width = int(new_height * ASPECT_RATIO)
+            frame_resized = cv2.resize(frame, (new_width, new_height))
+            frames.append(np.expand_dims(frame_resized, axis=0))
+        counter += 1
 
     # Release the video file
     cap.release()
 
     return np.concatenate(frames, axis=0)
 
+# testing video output
+# def write_to_video(frames):
+#     fps = 10
+#     width = 480
+#     height = 270
+    
+#     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+#     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
+
+#     for frame in frames:
+#         out.write(frame)
+
 def load_data_and_labels(directory):
     data = []
     labels = []
+    files_kept = []
+    num_files = len(os.listdir(directory))
     for i, filename in enumerate(os.listdir(directory)):
-        if i > 3: # save memory locally
-            break
         if filename.endswith('.mp4'): 
             filepath = os.path.join(directory, filename)
-            frames = load_frames(filepath)
-            data.append(frames) # we will need to pad these later before passing into models
+            frames = load_frames(filepath, img_downsample_factor=4, fr_downsample_factor=5)
+            if frames is None:
+                continue
+            # write_to_video(frames)
+            files_kept.append(filename)
+            # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
+            data.append(np.expand_dims(frames, axis=0))
+            print("{}/{} files loaded".format(i + 1, num_files - 1))
+        if len(data) == 100: # for now, let's just use 100 training files
+            break
     # load metadata info
     metadata_path = os.path.join(directory, "metadata.json")
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
-        for d in metadata.values():
-            label = d["label"]
+        for filename in files_kept:
+            label = metadata[filename]["label"]
             labels.append(1 if label == 'FAKE' else 0)
     
-    return data, np.asarray(labels)
+    return np.concatenate(data, axis=0), np.asarray(labels)
+
+def check_memory_usage():
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    memory_usage = usage[2] / (1024 ** 3)
+    print(f"Current process is using {memory_usage:.2f} GB of memory.")
 
 # def load_audio(filepath):
 #     # Load the audio file
@@ -62,7 +104,11 @@ def load_data_and_labels(directory):
 #     audio_clip.close()
 
 # WE MAY NEED TO DOWNSAMPLE VIDEOS, RIGHT NOW THEY ARE HD AND TAKE UP A LOT OF SPACE
-# AND/OR WE CAN TAKE A SUBSET OF FRAMES PER VIDEO
+# AND/OR WE CAN TAKE A SUBSET OF FRAMES PER VIDEO (take every other frame)
+# CROP THE FACE (this gives more flexibility for sizing frames)? 
+# but there could be multiple faces, and perhaps other signs from the video that aren't the face.
+# we could investigate what parts of image are being detected from the model based on features
 if __name__ == '__main__':
     train_data, labels = load_data_and_labels(TRAIN_DATA_DIRECTORY)
+    check_memory_usage()
     print(len(train_data), labels.shape)
