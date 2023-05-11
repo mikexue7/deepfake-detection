@@ -1,3 +1,7 @@
+import torch
+from torch.utils.data import DataLoader
+import torch.optim as optim
+
 import numpy as np
 import cv2
 import os
@@ -7,6 +11,9 @@ import json
 
 import pdb
 import resource
+
+from frame_by_frame_model import preprocess_frames_and_labels, FrameByFrameDataset, FrameByFrameCNN
+from utils import train
 
 TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
@@ -36,14 +43,14 @@ def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
         if counter % fr_downsample_factor == 0:
             new_height = frame.shape[0] // img_downsample_factor
             new_width = int(new_height * ASPECT_RATIO)
-            frame_resized = cv2.resize(frame, (new_width, new_height))
-            frames.append(np.expand_dims(frame_resized, axis=0))
+            frame_resized = np.transpose(cv2.resize(frame, (new_width, new_height)), (2, 0, 1)).astype('float32') # make channel first dimension
+            frames.append(torch.from_numpy(frame_resized).unsqueeze(dim=0))
         counter += 1
 
     # Release the video file
     cap.release()
 
-    return np.concatenate(frames, axis=0)
+    return torch.cat(frames, dim=0)
 
 # testing video output
 # def write_to_video(frames):
@@ -71,9 +78,9 @@ def load_data_and_labels(directory):
             # write_to_video(frames)
             files_kept.append(filename)
             # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
-            data.append(np.expand_dims(frames, axis=0))
+            data.append(frames.unsqueeze(dim=0))
             print("{}/{} files loaded".format(i + 1, num_files - 1))
-        if len(data) == 100: # for now, let's just use 100 training files
+        if len(data) == 5: # for now, let's just use 5 training files
             break
     # load metadata info
     metadata_path = os.path.join(directory, "metadata.json")
@@ -83,7 +90,7 @@ def load_data_and_labels(directory):
             label = metadata[filename]["label"]
             labels.append(1 if label == 'FAKE' else 0)
     
-    return np.concatenate(data, axis=0), np.asarray(labels)
+    return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32)
 
 def check_memory_usage():
     usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -109,6 +116,20 @@ def check_memory_usage():
 # but there could be multiple faces, and perhaps other signs from the video that aren't the face.
 # we could investigate what parts of image are being detected from the model based on features
 if __name__ == '__main__':
-    train_data, labels = load_data_and_labels(TRAIN_DATA_DIRECTORY)
+    train_data, train_labels = load_data_and_labels(TRAIN_DATA_DIRECTORY)
     check_memory_usage()
-    print(len(train_data), labels.shape)
+    print(train_data.shape, train_labels.shape)
+    train_frames_fbf, train_labels_fbf = preprocess_frames_and_labels(train_data, train_labels)
+    print(train_frames_fbf.shape, train_labels_fbf.shape)
+    fbf_dataset = FrameByFrameDataset(train_frames_fbf, train_labels_fbf)
+    train_dataloader = DataLoader(fbf_dataset, batch_size=64, shuffle=True)
+
+    # initialize model and optimizer, then train
+    fbf_model = FrameByFrameCNN([32, 16], [5, 3], [2, 1], [100], train_frames_fbf.shape[2], train_frames_fbf.shape[3])
+    total_params = sum(param.numel() for param in fbf_model.parameters())
+    print(f"Number of model parameters: {total_params}")
+    check_memory_usage()
+    optimizer = optim.Adam(fbf_model.parameters())
+
+    train(fbf_model, optimizer, train_dataloader, 'cpu')
+
