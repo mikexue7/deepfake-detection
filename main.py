@@ -16,6 +16,7 @@ from frame_by_frame_model import preprocess_frames_and_labels, FrameByFrameDatas
 from utils import train
 
 TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
+# TEST_DATA_DIRECTORY = "./test_videos/" test data has no labels
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
 
 def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
@@ -52,18 +53,6 @@ def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
 
     return torch.cat(frames, dim=0)
 
-# testing video output
-# def write_to_video(frames):
-#     fps = 10
-#     width = 480
-#     height = 270
-    
-#     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-#     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
-
-#     for frame in frames:
-#         out.write(frame)
-
 def load_data_and_labels(directory):
     data = []
     labels = []
@@ -80,7 +69,7 @@ def load_data_and_labels(directory):
             # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
             data.append(frames.unsqueeze(dim=0))
             print("{}/{} files loaded".format(i + 1, num_files - 1))
-        if len(data) == 5: # for now, let's just use 5 training files
+        if len(data) == 5: # for now, let's just use 50 training files
             break
     # load metadata info
     metadata_path = os.path.join(directory, "metadata.json")
@@ -97,19 +86,6 @@ def check_memory_usage():
     memory_usage = usage[2] / (1024 ** 3)
     print(f"Current process is using {memory_usage:.2f} GB of memory.")
 
-# def load_audio(filepath):
-#     # Load the audio file
-#     audio_clip = AudioFileClip(filepath)
-
-#     # Extract the audio data
-#     audio_data = audio_clip.to_soundarray()
-
-#     # Print the shape of the audio data array
-#     print(audio_data.shape)
-
-#     # Release the audio file
-#     audio_clip.close()
-
 # WE MAY NEED TO DOWNSAMPLE VIDEOS, RIGHT NOW THEY ARE HD AND TAKE UP A LOT OF SPACE
 # AND/OR WE CAN TAKE A SUBSET OF FRAMES PER VIDEO (take every other frame)
 # CROP THE FACE (this gives more flexibility for sizing frames)? 
@@ -121,15 +97,25 @@ if __name__ == '__main__':
     print(train_data.shape, train_labels.shape)
     train_frames_fbf, train_labels_fbf = preprocess_frames_and_labels(train_data, train_labels)
     print(train_frames_fbf.shape, train_labels_fbf.shape)
-    fbf_dataset = FrameByFrameDataset(train_frames_fbf, train_labels_fbf)
-    train_dataloader = DataLoader(fbf_dataset, batch_size=64, shuffle=True)
+    fbf_train_dataset = FrameByFrameDataset(train_frames_fbf, train_labels_fbf)
+    train_dataloader = DataLoader(fbf_train_dataset, batch_size=64, shuffle=True)
+
+    # test_data, test_labels = load_data_and_labels(TEST_DATA_DIRECTORY)
+    # check_memory_usage()
+    # print(test_data.shape, test_labels.shape)
+    # test_frames_fbf, test_labels_fbf = preprocess_frames_and_labels(test_data, test_labels)
+    # print(test_frames_fbf.shape, test_labels_fbf.shape)
+    # fbf_test_dataset = FrameByFrameDataset(test_frames_fbf, test_labels_fbf)
+    # test_dataloader = DataLoader(fbf_test_dataset, batch_size=64, shuffle=True)
 
     # initialize model and optimizer, then train
     fbf_model = FrameByFrameCNN([32, 16], [5, 3], [2, 1], [100], train_frames_fbf.shape[2], train_frames_fbf.shape[3])
     total_params = sum(param.numel() for param in fbf_model.parameters())
     print(f"Number of model parameters: {total_params}")
     check_memory_usage()
-    optimizer = optim.Adam(fbf_model.parameters())
+    optimizer = optim.Adam(fbf_model.parameters(), lr=1e-5)
 
-    train(fbf_model, optimizer, train_dataloader, 'cpu')
+    train(fbf_model, optimizer, train_dataloader, device='cpu')
+    # test_acc = check_accuracy(fbf_model, test_dataloader, device='cpu')
+    # print('Testing accuracy: (%.2f)' % 100 * test_acc)
 
