@@ -67,6 +67,22 @@ def check_accuracy(model, loader, device, eval_fn, preprocess_fn=None):
         log_loss = total_loss.item() / num_samples
     return acc, log_loss
 
+def extract_faces(image):
+    # Load the pre-trained face cascade from OpenCV
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # Detect faces in the grayscale image
+    faces = face_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    # Extract and return the faces
+    extracted_faces = []
+    for (x, y, w, h) in faces:
+        face = image_rgb[y:y+h, x:x+w]
+        extracted_faces.append(face)
+
+    return extracted_faces
+
 # def load_audio(filepath):
 #     # Load the audio file
 #     audio_clip = AudioFileClip(filepath)

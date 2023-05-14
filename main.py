@@ -16,7 +16,7 @@ import resource
 import argparse
 
 from frame_by_frame_model import flatten_videos_and_labels, fbf_eval, FrameByFrameCNN
-from utils import train, check_accuracy, check_memory_usage
+from utils import train, check_accuracy, check_memory_usage, extract_faces
 
 TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
@@ -61,7 +61,9 @@ def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
         if counter % fr_downsample_factor == 0:
             new_height = frame.shape[0] // img_downsample_factor
             new_width = int(new_height * ASPECT_RATIO)
-            frame_resized = np.transpose(cv2.resize(frame, (new_width, new_height)), (2, 0, 1)).astype('float32') # make channel first dimension
+            #frame_resized = np.transpose(cv2.resize(frame, (new_width, new_height)), (2, 0, 1)).astype('float32') # make channel first dimension
+            extracted_face = extract_faces(frame)[0]
+            frame_resized = np.transpose(extracted_face, (2, 0, 1)).astype('float32')
             frames.append(torch.from_numpy(frame_resized).unsqueeze(dim=0))
         counter += 1
 
