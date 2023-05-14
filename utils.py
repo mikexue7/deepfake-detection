@@ -83,6 +83,41 @@ def extract_faces(image):
 
     return extracted_faces
 
+
+def extract_faces_square(image):
+    # Load the pre-trained face cascade from OpenCV
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+    # Convert the image from BGR to RGB
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Detect faces in the image
+    faces = face_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    # Extract and return the square faces with original color
+    extracted_faces = []
+    for (x, y, w, h) in faces:
+        # Calculate the maximum dimension (width or height) of the face
+        face_size = max(w, h)
+
+        # Calculate the center of the face
+        face_center_x = x + w // 2
+        face_center_y = y + h // 2
+
+        # Calculate the coordinates for the square bounding box
+        face_left = face_center_x - face_size // 2
+        face_top = face_center_y - face_size // 2
+        face_right = face_left + face_size
+        face_bottom = face_top + face_size
+
+        # Extract the face region and resize it to a square shape
+        face = image_rgb[face_top:face_bottom, face_left:face_right]
+        face = cv2.resize(face, (128, 128))
+
+        extracted_faces.append(face)
+
+    return extracted_faces
+
 # def load_audio(filepath):
 #     # Load the audio file
 #     audio_clip = AudioFileClip(filepath)
