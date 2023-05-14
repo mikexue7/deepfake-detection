@@ -1,23 +1,40 @@
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 import torch.optim as optim
 
 import numpy as np
 import cv2
 import os
 import json
+import random
 # os.environ["IMAGEIO_FFMPEG_EXE"] = "/Users/michaelxue/anaconda3/lib/python3.9/site-packages/ffmpeg/"
 # from moviepy.editor import AudioFileClip
 
 import pdb
 import resource
+import argparse
 
-from frame_by_frame_model import preprocess_frames_and_labels, FrameByFrameDataset, FrameByFrameCNN
-from utils import train
+from frame_by_frame_model import flatten_videos_and_labels, fbf_eval, FrameByFrameCNN
+from utils import train, check_accuracy, check_memory_usage
 
 TRAIN_DATA_DIRECTORY = "./train_sample_videos/"
-# TEST_DATA_DIRECTORY = "./test_videos/" test data has no labels
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
+VIDEOS_PROCESS_AT_ONCE = 10
+TRAIN_TEST_SPLIT = 0.8
+
+class DeepfakeDataset(Dataset):
+    def __init__(self, videos, labels):
+        self.videos = videos
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.videos)
+    
+    def __getitem__(self, idx):
+        video = self.videos[idx]
+        label = self.labels[idx]
+        return video, label
 
 def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
     # Open the video file
@@ -53,69 +70,79 @@ def load_frames(filepath, img_downsample_factor, fr_downsample_factor):
 
     return torch.cat(frames, dim=0)
 
-def load_data_and_labels(directory):
+def load_data_and_labels(files, metadata_path):
     data = []
     labels = []
     files_kept = []
-    num_files = len(os.listdir(directory))
-    for i, filename in enumerate(os.listdir(directory)):
-        if filename.endswith('.mp4'): 
-            filepath = os.path.join(directory, filename)
-            frames = load_frames(filepath, img_downsample_factor=4, fr_downsample_factor=5)
-            if frames is None:
-                continue
-            # write_to_video(frames)
-            files_kept.append(filename)
-            # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
-            data.append(frames.unsqueeze(dim=0))
-            print("{}/{} files loaded".format(i + 1, num_files - 1))
-        if len(data) == 5: # for now, let's just use 50 training files
-            break
+    for i, file in enumerate(files):
+        filepath = os.path.join(TRAIN_DATA_DIRECTORY, file)
+        frames = load_frames(filepath, img_downsample_factor=4, fr_downsample_factor=5)
+        if frames is None:
+            continue
+        files_kept.append(file) # only those matching the aspect ratio 16:9 are kept for now
+        # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
+        data.append(frames.unsqueeze(dim=0))
+        print("{}/{} files loaded".format(i + 1, len(files)))
     # load metadata info
-    metadata_path = os.path.join(directory, "metadata.json")
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
-        for filename in files_kept:
-            label = metadata[filename]["label"]
+        for file in files_kept:
+            label = metadata[file]["label"]
             labels.append(1 if label == 'FAKE' else 0)
     
     return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32)
 
-def check_memory_usage():
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    memory_usage = usage[2] / (1024 ** 3)
-    print(f"Current process is using {memory_usage:.2f} GB of memory.")
-
-# WE MAY NEED TO DOWNSAMPLE VIDEOS, RIGHT NOW THEY ARE HD AND TAKE UP A LOT OF SPACE
-# AND/OR WE CAN TAKE A SUBSET OF FRAMES PER VIDEO (take every other frame)
-# CROP THE FACE (this gives more flexibility for sizing frames)? 
-# but there could be multiple faces, and perhaps other signs from the video that aren't the face.
-# we could investigate what parts of image are being detected from the model based on features
 if __name__ == '__main__':
-    train_data, train_labels = load_data_and_labels(TRAIN_DATA_DIRECTORY)
-    check_memory_usage()
-    print(train_data.shape, train_labels.shape)
-    train_frames_fbf, train_labels_fbf = preprocess_frames_and_labels(train_data, train_labels)
-    print(train_frames_fbf.shape, train_labels_fbf.shape)
-    fbf_train_dataset = FrameByFrameDataset(train_frames_fbf, train_labels_fbf)
-    train_dataloader = DataLoader(fbf_train_dataset, batch_size=64, shuffle=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--num_videos', type=int, default=100,
+                        help='number of videos to use in total (training and test)')
+    args = parser.parse_args()
+    num_videos = args.num_videos
+    num_train = int(num_videos * TRAIN_TEST_SPLIT)
 
-    # test_data, test_labels = load_data_and_labels(TEST_DATA_DIRECTORY)
-    # check_memory_usage()
-    # print(test_data.shape, test_labels.shape)
-    # test_frames_fbf, test_labels_fbf = preprocess_frames_and_labels(test_data, test_labels)
-    # print(test_frames_fbf.shape, test_labels_fbf.shape)
-    # fbf_test_dataset = FrameByFrameDataset(test_frames_fbf, test_labels_fbf)
-    # test_dataloader = DataLoader(fbf_test_dataset, batch_size=64, shuffle=True)
+    files = [file for file in os.listdir(TRAIN_DATA_DIRECTORY) if file.endswith('.mp4')][:num_videos]
+    random.shuffle(files)
+    files_train, files_test = files[:num_train], files[num_train:] # split training/testing by files first, since we cannot fit all the data in memory
+    metadata_path = os.path.join(TRAIN_DATA_DIRECTORY, "metadata.json")
+    # Create a generator that yields groups of videos at a time
+    file_train_groups = (files_train[i:i + VIDEOS_PROCESS_AT_ONCE] for i in range(0, len(files_train), VIDEOS_PROCESS_AT_ONCE))
+    # eventually we'll need one for file_test_groups
 
-    # initialize model and optimizer, then train
-    fbf_model = FrameByFrameCNN([32, 16], [5, 3], [2, 1], [100], train_frames_fbf.shape[2], train_frames_fbf.shape[3])
-    total_params = sum(param.numel() for param in fbf_model.parameters())
-    print(f"Number of model parameters: {total_params}")
-    check_memory_usage()
-    optimizer = optim.Adam(fbf_model.parameters(), lr=1e-5)
+    # Training
+    # Use a loop and next() to get all the groups of videos, train on each set of videos
+    num_iters = 0
+    while True:
+        try:
+            curr_files = next(file_train_groups) # get next batch of files
+            train_data, train_labels = load_data_and_labels(curr_files, metadata_path)
+            check_memory_usage()
+            print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}")
+            train_dataset = DeepfakeDataset(train_data, train_labels)
+            train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
 
-    train(fbf_model, optimizer, train_dataloader, device='cpu')
-    # test_acc = check_accuracy(fbf_model, test_dataloader, device='cpu')
-    # print('Testing accuracy: (%.2f)' % 100 * test_acc)
+            height, width = train_data.shape[3], train_data.shape[4]
 
+            device = torch.device('cpu') # or mps or cpu
+
+            # initialize model and optimizer, then train
+            if num_iters == 0:
+                fbf_model = FrameByFrameCNN([32, 16], [5, 3], [2, 1], [100], 2, height, width)
+                total_params = sum(param.numel() for param in fbf_model.parameters())
+                print(f"Number of model parameters: {total_params}")
+                check_memory_usage()
+                optimizer = optim.Adam(fbf_model.parameters(), lr=1e-5)
+
+            train(fbf_model, optimizer, train_dataloader, device=device, epochs=4, eval_fn=fbf_eval, preprocess_fn=flatten_videos_and_labels)
+
+            num_iters += 1
+
+        except StopIteration:
+            # Handle the end of the sequence
+            break
+
+    # Evaluation on test set
+    test_data, test_labels = load_data_and_labels(files_test, metadata_path)
+    test_dataset = DeepfakeDataset(test_data, test_labels)
+    test_dataloader = DataLoader(test_dataset, batch_size=4, shuffle=True)
+    test_acc, test_loss = check_accuracy(fbf_model, test_dataloader, device=device, eval_fn=fbf_eval, preprocess_fn=flatten_videos_and_labels)
+    print("Test accuracy = %.4f, test log loss = %.4f" % (test_acc, test_loss))
