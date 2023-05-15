@@ -4,14 +4,14 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 import cv2
 
-import resource
+# import resource
 
 # from moviepy.editor import AudioFileClip
 
-def check_memory_usage():
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    memory_usage = usage[2] / (1024 ** 3)
-    print(f"Current process is using {memory_usage:.2f} GB of memory.")
+# def check_memory_usage():
+#     usage = resource.getrusage(resource.RUSAGE_SELF)
+#     memory_usage = usage[2] / (1024 ** 3)
+#     print(f"Current process is using {memory_usage:.2f} GB of memory.")
 
 def flatten(x):
     N = x.shape[0] # read in N, C, H, W
@@ -43,15 +43,16 @@ def train(model, optimizer, loader_train, device, epochs, eval_fn, preprocess_fn
             # computed by the backwards pass.
             optimizer.step()
 
-            if t % 10 == 0:
-                print('Iteration %d, log loss = %.4f' % (t, loss.item()))
+            # if t % 10 == 0:
+            print('Iteration %d, log loss = %.4f' % (t, loss.item()))
                 
-        acc, _ = check_accuracy(model, loader_train, device, eval_fn, preprocess_fn)
+        acc, _, _, _ = check_accuracy(model, loader_train, device, eval_fn, preprocess_fn)
         print('Training accuracy = %.4f' % (100 * acc))
 
 def check_accuracy(model, loader, device, eval_fn, preprocess_fn=None):
     num_correct, num_samples, total_loss = 0, 0, 0
     model.eval()
+    y_true, y_pred = [], []
     with torch.no_grad():
         for x, y in loader:
             x = x.to(device=device)
@@ -61,11 +62,16 @@ def check_accuracy(model, loader, device, eval_fn, preprocess_fn=None):
             scores = model(x)
             preds = torch.round(torch.sigmoid(scores))
             total_loss += F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='sum')
-            num_correct += eval_fn(preds, y)
+            preds, y, nc = eval_fn(preds, y)
+            print(preds.shape, y.shape)
+            num_correct += nc
             num_samples += preds.shape[0]
+
+            y_true.extend(y.cpu().numpy().flatten())
+            y_pred.extend(preds.cpu().numpy().flatten())
         acc = float(num_correct) / num_samples
         log_loss = total_loss.item() / num_samples
-    return acc, log_loss
+    return acc, log_loss, y_true, y_pred
 
 def extract_faces(image):
     # Load the pre-trained face cascade from OpenCV
@@ -83,8 +89,7 @@ def extract_faces(image):
 
     return extracted_faces
 
-
-def extract_faces_square(image):
+def extract_faces_square(image, dimension):
     # Load the pre-trained face cascade from OpenCV
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -132,13 +137,13 @@ def extract_faces_square(image):
 #     audio_clip.close()
 
 # testing video output
-# def write_to_video(frames):
-#     fps = 10
-#     width = 480
-#     height = 270
+def write_to_video(frames):
+    fps = 10
+    width = 128
+    height = 128
     
-#     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-#     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
 
-#     for frame in frames:
-#         out.write(frame)
+    for frame in frames:
+        out.write(frame)

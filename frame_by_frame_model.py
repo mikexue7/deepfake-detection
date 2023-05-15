@@ -16,9 +16,9 @@ def flatten_videos_and_labels(videos, labels):
 
 def fbf_eval(preds, y):
     # preds is (n_videos, n_frames), y is (n_videos, n_frames)
-    preds = torch.round(torch.sum(preds, dim=1) / preds.shape[1]) # majority vote
-    y = y[:, 0] # each column is the same
-    return (preds == y).sum()
+    preds_updated = torch.round(torch.sum(preds, dim=1) / preds.shape[1]) # majority vote
+    y_updated = y[:, 0] # each column is the same
+    return preds_updated, y_updated, (preds_updated == y_updated).sum()
 
 # write dataset
 # class FrameByFrameDataset(Dataset):
