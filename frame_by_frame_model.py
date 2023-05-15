@@ -14,25 +14,21 @@ def flatten_videos_and_labels(videos, labels):
     assert videos_reshaped.shape[0] == labels_reshaped.shape[0]
     return videos_reshaped, labels_reshaped
 
-def fbf_eval(preds, y):
-    # preds is (n_videos, n_frames), y is (n_videos, n_frames)
-    preds_updated = torch.round(torch.sum(preds, dim=1) / preds.shape[1]) # majority vote
-    y_updated = y[:, 0] # each column is the same
-    return preds_updated, y_updated, (preds_updated == y_updated).sum()
+def unflatten_probs_and_labels(probs, labels, batch_size):
+    # probs, labels are (n_videos * n_frames), need to reshape them to (n_videos)
+    probs_reshaped = torch.mean(probs.reshape((batch_size, -1)), dim=1) # (n_videos), take the average of the probabilities
+    labels_reshaped = labels.reshape((batch_size, -1))[:, 0] # each column is the same, has shape (n_videos)
+    return probs_reshaped, labels_reshaped
 
-# write dataset
-# class FrameByFrameDataset(Dataset):
-#     def __init__(self, frames, labels):
-#         self.frames = frames
-#         self.labels = labels
+# FOR MAJORITY VOTE
+# def fbf_eval(scores, labels): # scores here is (n_videos, n_frames), labels is (n_videos)
+#     frame_preds = torch.round(torch.sigmoid(scores))
+#     video_preds = torch.round(torch.sum(frame_preds, dim=1) / scores.shape[1]) # majority vote
 
-#     def __len__(self):
-#         return len(self.frames)
-    
-#     def __getitem__(self, idx):
-#         frame = self.frames[idx]
-#         label = self.labels[idx]
-#         return frame, label
+#     num_correct = (video_preds == labels).sum()
+#     scores_per_video = torch.mean(scores, dim=1)
+#     log_loss_batch = F.binary_cross_entropy(torch.sigmoid(scores_per_video), labels, reduction='sum')
+#     return video_preds, num_correct, log_loss_batch
 
 # model
 class FrameByFrameCNN(nn.Module):

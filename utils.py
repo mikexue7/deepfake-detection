@@ -17,19 +17,19 @@ def flatten(x):
     N = x.shape[0] # read in N, C, H, W
     return x.view(N, -1)  # "flatten" the C * H * W values into a single vector per image
 
-def train(model, optimizer, loader_train, device, epochs, eval_fn, preprocess_fn=None):
+def train(model, optimizer, loader_train, device, epochs, preprocess_fn=None, postprocess_fn=None):
     model = model.to(device=device)  # move the model parameters to CPU/GPU
+    model.train()  # put model to training mode
     for e in range(epochs):
         print(f"Begin training for epoch {e + 1}")
         for t, (x, y) in enumerate(loader_train):
-            model.train()  # put model to training mode
             x = x.to(device=device)  # move to device, e.g. GPU
             y = y.to(device=device)
 
             if preprocess_fn:
                 x, y = preprocess_fn(x, y)
             scores = model(x)
-            loss = F.binary_cross_entropy(torch.sigmoid(scores), y)
+            loss = F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='mean') # average BCE loss per frame (for FBF model)
 
             # Zero out all of the gradients for the variables which the optimizer
             # will update.
@@ -43,29 +43,30 @@ def train(model, optimizer, loader_train, device, epochs, eval_fn, preprocess_fn
             # computed by the backwards pass.
             optimizer.step()
 
-            # if t % 10 == 0:
-            print('Iteration %d, log loss = %.4f' % (t, loss.item()))
+            print('Iteration %d, loss = %.4f' % (t, loss.item())) # generic loss, can differ between models based on preprocessing
                 
-        acc, _, _, _ = check_accuracy(model, loader_train, device, eval_fn, preprocess_fn)
-        print('Training accuracy = %.4f' % (100 * acc))
+        acc, log_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+        print('Training accuracy = %.4f, log loss = %.4f' % (100 * acc, log_loss)) # official log loss score
 
-def check_accuracy(model, loader, device, eval_fn, preprocess_fn=None):
+def eval_model(model, loader, device, preprocess_fn=None, postprocess_fn=None):
     num_correct, num_samples, total_loss = 0, 0, 0
     model.eval()
     y_true, y_pred = [], []
     with torch.no_grad():
         for x, y in loader:
+            batch_size = x.shape[0]
             x = x.to(device=device)
             y = y.to(device=device)
             if preprocess_fn:
                 x, y = preprocess_fn(x, y)
             scores = model(x)
-            preds = torch.round(torch.sigmoid(scores))
-            total_loss += F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='sum')
-            preds, y, nc = eval_fn(preds, y)
-            print(preds.shape, y.shape)
-            num_correct += nc
-            num_samples += preds.shape[0]
+            probs = torch.sigmoid(scores)
+            if postprocess_fn:
+                probs, y = postprocess_fn(probs, y, batch_size)
+            preds = torch.round(probs)
+            num_correct += (preds == y).sum()
+            num_samples += batch_size
+            total_loss += F.binary_cross_entropy(probs, y, reduction='sum')
 
             y_true.extend(y.cpu().numpy().flatten())
             y_pred.extend(preds.cpu().numpy().flatten())
@@ -73,11 +74,38 @@ def check_accuracy(model, loader, device, eval_fn, preprocess_fn=None):
         log_loss = total_loss.item() / num_samples
     return acc, log_loss, y_true, y_pred
 
+# def eval_model_with_eval_fn(model, loader, device, eval_fn, preprocess_fn=None, postprocess_fn=None):
+#     num_correct, num_samples, total_loss = 0, 0, 0
+#     model.eval()
+#     y_true, y_pred = [], []
+#     with torch.no_grad():
+#         for x, y in loader:
+#             batch_size = x.shape[0]
+#             x = x.to(device=device)
+#             y = y.to(device=device)
+#             if preprocess_fn:
+#                 x, y = preprocess_fn(x, y)
+#             scores = model(x)
+#             if postprocess_fn:
+#                 scores, y = postprocess_fn(scores, y, batch_size)
+#             preds, nc, log_loss_batch = eval_fn(scores, y)
+#             num_correct += nc
+#             num_samples += batch_size
+#             total_loss += log_loss_batch
+
+#             y_true.extend(y.cpu().numpy().flatten())
+#             y_pred.extend(preds.cpu().numpy().flatten())
+#         acc = float(num_correct) / num_samples
+#         log_loss = total_loss.item() / num_samples
+#     return acc, log_loss, y_true, y_pred
+
 def extract_faces(image):
     # Load the pre-trained face cascade from OpenCV
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
+    # Convert the image from BGR to RGB
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
     # Detect faces in the grayscale image
     faces = face_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
@@ -117,7 +145,7 @@ def extract_faces_square(image, dimension):
 
         # Extract the face region and resize it to a square shape
         face = image_rgb[face_top:face_bottom, face_left:face_right]
-        face = cv2.resize(face, (128, 128))
+        face = cv2.resize(face, (dimension, dimension))
 
         extracted_faces.append(face)
 
@@ -137,13 +165,13 @@ def extract_faces_square(image, dimension):
 #     audio_clip.close()
 
 # testing video output
-def write_to_video(frames):
-    fps = 10
-    width = 128
-    height = 128
+# def write_to_video(frames):
+#     fps = 10
+#     width = 128
+#     height = 128
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
+#     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+#     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
 
-    for frame in frames:
-        out.write(frame)
+#     for frame in frames:
+#         out.write(frame)
