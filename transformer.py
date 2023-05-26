@@ -10,22 +10,22 @@ from torchvision.transforms import Compose, Resize, ToTensor
 from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange, Reduce
 from torchsummary import summary
+from load_data import return_data
+
+# img = Image.open('/users/jacobmejia/Downloads/fake_7.jpg')
 
 
-img = Image.open('/users/jacobmejia/Downloads/fake_7.jpg')
+# fig = plt.figure()
+# plt.imshow(img)
 
+# # resize to imagenet size 
+# transform = Compose([Resize((224, 224)), ToTensor()])
+# x = transform(img)
+# x = x.unsqueeze(0) # add batch dim
+# print(x.shape)
 
-fig = plt.figure()
-plt.imshow(img)
-
-# resize to imagenet size 
-transform = Compose([Resize((224, 224)), ToTensor()])
-x = transform(img)
-x = x.unsqueeze(0) # add batch dim
-print(x.shape)
-
-patch_size = 16 # 16 pixels
-pathes = rearrange(x, 'b c (h s1) (w s2) -> b (h w) (s1 s2 c)', s1=patch_size, s2=patch_size)
+# patch_size = 16 # 16 pixels
+# pathes = rearrange(x, 'b c (h s1) (w s2) -> b (h w) (s1 s2 c)', s1=patch_size, s2=patch_size)
 
 class PatchEmbedding(nn.Module):
     def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: int = 224):
@@ -150,8 +150,8 @@ class ViT(nn.Sequential):
                 
 
 model = ViT()
-out = model(x)
-print(out)
+# out = model(x)
+# print(out)
 loss_fn = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
@@ -160,8 +160,12 @@ model.to(device)
 
 # Training loop
 num_epochs = 10
+print("Loading in Data")
+train_dataloader = return_data()
+print("Successfully Loaded In Data")
 
 for epoch in range(num_epochs):
+    print("Beginning Training")
     running_loss = 0.0
     for images, labels in train_dataloader:
         images = images.to(device)
