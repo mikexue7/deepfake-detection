@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import torch.optim as optim
 
 from torch import nn
 from torch import Tensor
@@ -11,7 +12,8 @@ from einops.layers.torch import Rearrange, Reduce
 from torchsummary import summary
 
 
-img = Image.open('fake_0.jpg')
+img = Image.open('/users/jacobmejia/Downloads/fake_7.jpg')
+
 
 fig = plt.figure()
 plt.imshow(img)
@@ -138,7 +140,7 @@ class ViT(nn.Sequential):
                 emb_size: int = 768,
                 img_size: int = 224,
                 depth: int = 12,
-                n_classes: int = 2,
+                n_classes: int = 1,
                 **kwargs):
         super().__init__(
             PatchEmbedding(in_channels, patch_size, emb_size, img_size),
@@ -146,5 +148,41 @@ class ViT(nn.Sequential):
             ClassificationHead(emb_size, n_classes)
         )
                 
-out = ViT()(x)
-print(out.shape)
+
+model = ViT()
+out = model(x)
+print(out)
+loss_fn = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# Training loop
+num_epochs = 10
+
+for epoch in range(num_epochs):
+    running_loss = 0.0
+    for images, labels in train_dataloader:
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Zero the parameter gradients
+        optimizer.zero_grad()
+
+        # Forward pass
+        outputs = model(images)
+
+        # Compute the loss
+        loss = loss_fn(outputs, labels)
+
+        # Backward pass and optimization
+        loss.backward()
+        optimizer.step()
+
+        # Update the running loss
+        running_loss += loss.item()
+
+    # Print the average loss for the epoch
+    epoch_loss = running_loss / len(train_dataloader)
+    print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")
