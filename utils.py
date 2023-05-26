@@ -19,7 +19,11 @@ def flatten(x):
 
 def train(model, optimizer, loader_train, device, epochs, preprocess_fn=None, postprocess_fn=None):
     model = model.to(device=device)  # move the model parameters to CPU/GPU
-    model.train()  # put model to training mode
+    
+    acc, log_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+    print('Prior to training: training accuracy = %.4f, log loss = %.4f' % (100 * acc, log_loss)) # official log loss score
+    
+    model.train() # put model to training mode
     for e in range(epochs):
         print(f"Begin training for epoch {e + 1}")
         for t, (x, y) in enumerate(loader_train):
@@ -42,8 +46,9 @@ def train(model, optimizer, loader_train, device, epochs, preprocess_fn=None, po
             # Actually update the parameters of the model using the gradients
             # computed by the backwards pass.
             optimizer.step()
-
-            print('Iteration %d, loss = %.4f' % (t, loss.item())) # generic loss, can differ between models based on preprocessing
+            
+            if (t + 1) % 15 == 0:
+                print('Iteration %d, loss = %.4f' % (t + 1, loss.item())) # generic loss, can differ between models based on preprocessing
                 
         acc, log_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
         print('Training accuracy = %.4f, log loss = %.4f' % (100 * acc, log_loss)) # official log loss score

@@ -143,7 +143,7 @@ if __name__ == '__main__':
     test_dataset = DeepfakeDataset(test_data, test_labels)
     test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=True)
     test_acc, test_loss, y_true, y_pred = eval_model(fbf_model, test_dataloader, device=device, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
-    print("Test accuracy = %.4f, log loss = %.4f" % (test_acc, test_loss))
+    print("Test accuracy = %.4f, log loss = %.4f" % (100 * test_acc, test_loss))
 
     cm = ConfusionMatrixDisplay.from_predictions(y_true, y_pred, cmap='Blues')
     plt.show()
