@@ -1,16 +1,18 @@
-from facenet_pytorch import InceptionResnetV1
+from facenet_pytorch import MTCNN, InceptionResnetV1
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 import torch.optim as optim
-import numpy as np
 import os
 import cv2
-from utils import extract_faces_square, train, eval_model
+from utils import train, eval_model
+
+import argparse
 
 # in this module, we want to further pretrain a resnet on our deepfake image dataset
 PATH_TO_TRAIN_IMAGES = "pretrain_images/train/"
+PATH_TO_VAL_IMAGES = "pretrain_images/val/"
 PATH_TO_TEST_IMAGES = "pretrain_images/test/"
 
 class DeepfakeImageDataset(Dataset):
@@ -26,24 +28,26 @@ class DeepfakeImageDataset(Dataset):
         label = self.labels[idx]
         return image, label
     
-def load_data_and_labels(directory, num_samples):
+def load_data_and_labels(directory, num_samples, device):
     data = []
     labels = []
 
     fake_dir = os.path.join(directory, "fake/")
     real_dir = os.path.join(directory, "real/")
+
+    # 160 is default value for passing into resnet after, post_process normalizes input, select_largest=False chooses face with highest prob rather than largest
+    mtcnn = MTCNN(image_size=160, post_process=True, select_largest=False, device=device)
     # load fake images
     for i, file in enumerate(os.listdir(fake_dir)):
         if i >= num_samples:
             break
         filepath = os.path.join(fake_dir, file)
         img = cv2.imread(filepath)
-        extracted_faces = extract_faces_square(img, 160)
-        if len(extracted_faces) == 0:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # change to RGB
+        extracted_face = mtcnn(img) # img here must have channels as last dim
+        if extracted_face is None: # no face detected
             continue
-        extracted_face = extracted_faces[0]
-        img_resized = np.transpose(extracted_face, (2, 0, 1)).astype('float32')
-        data.append(torch.from_numpy(img_resized).unsqueeze(dim=0))
+        data.append(extracted_face.unsqueeze(dim=0)) # extracted face already a FloatTensor
         labels.append(1)
         if (i + 1) % 1000 == 0:
             print(f"Loaded {i + 1} fake images")
@@ -53,37 +57,47 @@ def load_data_and_labels(directory, num_samples):
             break
         filepath = os.path.join(real_dir, file)
         img = cv2.imread(filepath)
-        extracted_faces = extract_faces_square(img, 160)
-        if len(extracted_faces) == 0:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # change to RGB
+        extracted_face = mtcnn(img) # img here must have channels as last dim
+        if extracted_face is None: # no face detected
             continue
-        extracted_face = extracted_faces[0]
-        img_resized = np.transpose(extracted_face, (2, 0, 1)).astype('float32')
-        data.append(torch.from_numpy(img_resized).unsqueeze(dim=0))
+        data.append(extracted_face.unsqueeze(dim=0)) # extracted face already a FloatTensor
         labels.append(0)
         if (i + 1) % 1000 == 0:
             print(f"Loaded {i + 1} real images")
     
-    return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+    return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32).unsqueeze(dim=1)
 
 if __name__ == '__main__':
-    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 5000)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--save_path', type=str, required=True, help='path to save pretrained CNN')
+    args = parser.parse_args()
+
+    device = torch.device('mps')
+
+    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 5000, 'cpu')
     print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}")
     train_dataset = DeepfakeImageDataset(train_data, train_labels)
     train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
-    device = torch.device('mps')
+    val_data, val_labels = load_data_and_labels(PATH_TO_VAL_IMAGES, 2000, 'cpu')
+    val_dataset = DeepfakeImageDataset(val_data, val_labels)
+    val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=True)
 
     resnet = InceptionResnetV1(pretrained='vggface2') # pretrained facial recognition model
     model = nn.Sequential(resnet, nn.Linear(512, 128), nn.ReLU(), nn.Linear(128, 1))
     total_params = sum(param.numel() for param in resnet.parameters())
     print(f"Number of model parameters: {total_params}")
-    optimizer = optim.Adam(resnet.parameters(), lr=1e-5)
+    optimizer = optim.Adam(resnet.parameters(), lr=1e-5, weight_decay=0.001)
 
-    train(model, optimizer, train_dataloader, device, epochs=5)
+    best_model_state_dict = train(model, optimizer, train_dataloader, val_dataloader, device, epochs=5)
+    best_model = model.load_state_dict(best_model_state_dict)
 
     # evaluate on test set
-    test_data, test_labels = load_data_and_labels(PATH_TO_TEST_IMAGES, 1000)
+    test_data, test_labels = load_data_and_labels(PATH_TO_TEST_IMAGES, 1000, 'cpu')
     test_dataset = DeepfakeImageDataset(test_data, test_labels)
     test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=True)
-    test_acc, test_loss, y_true, y_pred = eval_model(model, test_dataloader, device=device)
-    print("Test accuracy = %.4f, log loss = %.4f" % (test_acc, test_loss))
+    test_acc, test_loss, y_true, y_pred = eval_model(best_model, test_dataloader, device=device)
+    print("Test accuracy = %.4f, log loss = %.4f" % (100 * test_acc, test_loss))
+
+    torch.save(best_model_state_dict, args.save_path)
