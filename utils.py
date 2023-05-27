@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 import cv2
+import copy
 
 # import resource
 
@@ -17,9 +18,18 @@ def flatten(x):
     N = x.shape[0] # read in N, C, H, W
     return x.view(N, -1)  # "flatten" the C * H * W values into a single vector per image
 
-def train(model, optimizer, loader_train, device, epochs, preprocess_fn=None, postprocess_fn=None):
+def train(model, optimizer, loader_train, loader_val, device, epochs, preprocess_fn=None, postprocess_fn=None):
     model = model.to(device=device)  # move the model parameters to CPU/GPU
-    model.train()  # put model to training mode
+    
+    train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+    val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
+    print('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
+    print('Before training: validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
+    
+    model.train() # put model to training mode
+    best_val = 0
+    best_model_state_dict = None
+    
     for e in range(epochs):
         print(f"Begin training for epoch {e + 1}")
         for t, (x, y) in enumerate(loader_train):
@@ -42,11 +52,20 @@ def train(model, optimizer, loader_train, device, epochs, preprocess_fn=None, po
             # Actually update the parameters of the model using the gradients
             # computed by the backwards pass.
             optimizer.step()
-
-            print('Iteration %d, loss = %.4f' % (t, loss.item())) # generic loss, can differ between models based on preprocessing
+            
+            if (t + 1) % 15 == 0:
+                print('Iteration %d, loss = %.4f' % (t + 1, loss.item())) # generic loss, can differ between models based on preprocessing
                 
-        acc, log_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
-        print('Training accuracy = %.4f, log loss = %.4f' % (100 * acc, log_loss)) # official log loss score
+        train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+        val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
+        print('Training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
+        print('Validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
+
+        if val_acc > best_val:
+            best_val = val_acc
+            best_model_state_dict = copy.deepcopy(model.state_dict())
+    
+    return best_model_state_dict
 
 def eval_model(model, loader, device, preprocess_fn=None, postprocess_fn=None):
     num_correct, num_samples, total_loss = 0, 0, 0
