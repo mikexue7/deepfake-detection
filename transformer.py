@@ -7,28 +7,30 @@ from torch import nn
 from torch import Tensor
 from PIL import Image
 from torchvision.transforms import Compose, Resize, ToTensor
+import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange, Reduce
 from torchsummary import summary
 from load_data import return_data
 
-# img = Image.open('/users/jacobmejia/Downloads/fake_7.jpg')
+img = Image.open('/users/jacobmejia/Downloads/fake_7.jpg')
 
 
 # fig = plt.figure()
 # plt.imshow(img)
 
 # # resize to imagenet size 
-# transform = Compose([Resize((224, 224)), ToTensor()])
-# x = transform(img)
-# x = x.unsqueeze(0) # add batch dim
+transform = Compose([Resize((224, 224)), ToTensor()])
+x = transform(img)
+x = x.unsqueeze(0) # add batch dim
 # print(x.shape)
 
 # patch_size = 16 # 16 pixels
 # pathes = rearrange(x, 'b c (h s1) (w s2) -> b (h w) (s1 s2 c)', s1=patch_size, s2=patch_size)
 
+# NOTE:CHANGED THE EMBED SIZE FROM 768 TO 256
 class PatchEmbedding(nn.Module):
-    def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: int = 224):
+    def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 256, img_size: int = 224):
         self.patch_size = patch_size
         super().__init__()
         self.projection = nn.Sequential(
@@ -51,7 +53,7 @@ class PatchEmbedding(nn.Module):
         return x
     
 class MultiHeadAttention(nn.Module):
-    def __init__(self, emb_size: int = 768, num_heads: int = 8, dropout: float = 0):
+    def __init__(self, emb_size: int = 256, num_heads: int = 8, dropout: float = 0):
         super().__init__()
         self.emb_size = emb_size
         self.num_heads = num_heads
@@ -103,7 +105,7 @@ class FeedForwardBlock(nn.Sequential):
 
 class TransformerEncoderBlock(nn.Sequential):
     def __init__(self,
-                 emb_size: int = 768,
+                 emb_size: int = 256,
                  drop_p: float = 0.,
                  forward_expansion: int = 4,
                  forward_drop_p: float = 0.,
@@ -123,11 +125,11 @@ class TransformerEncoderBlock(nn.Sequential):
             ))
 
 class TransformerEncoder(nn.Sequential):
-    def __init__(self, depth: int = 12, **kwargs):
+    def __init__(self, depth: int = 6, **kwargs):
         super().__init__(*[TransformerEncoderBlock(**kwargs) for _ in range(depth)])
                 
 class ClassificationHead(nn.Sequential):
-    def __init__(self, emb_size: int = 768, n_classes: int = 1000):
+    def __init__(self, emb_size: int = 256, n_classes: int = 1000):
         super().__init__(
             Reduce('b n e -> b e', reduction='mean'),
             nn.LayerNorm(emb_size), 
@@ -137,9 +139,9 @@ class ViT(nn.Sequential):
     def __init__(self,     
                 in_channels: int = 3,
                 patch_size: int = 16,
-                emb_size: int = 768,
+                emb_size: int = 256,
                 img_size: int = 224,
-                depth: int = 12,
+                depth: int = 6,
                 n_classes: int = 1,
                 **kwargs):
         super().__init__(
@@ -147,46 +149,76 @@ class ViT(nn.Sequential):
             TransformerEncoder(depth, emb_size=emb_size, **kwargs),
             ClassificationHead(emb_size, n_classes)
         )
-                
+
+def eval_model(model, loader, device, preprocess_fn=None, postprocess_fn=None):
+    num_correct, num_samples, total_loss = 0, 0, 0
+    model.eval()
+    y_true, y_pred = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            batch_size = x.shape[0]
+            x = x.to(device=device)
+            y = y.to(device=device)
+            if preprocess_fn:
+                x, y = preprocess_fn(x, y)
+            scores = model(x)
+            probs = torch.sigmoid(scores)
+            if postprocess_fn:
+                probs, y = postprocess_fn(probs, y, batch_size)
+            preds = torch.round(probs)
+            num_correct += (preds == y).sum()
+            num_samples += batch_size
+            total_loss += F.binary_cross_entropy(probs, y, reduction='sum')
+
+            y_true.extend(y.cpu().numpy().flatten())
+            y_pred.extend(preds.cpu().numpy().flatten())
+        acc = float(num_correct) / num_samples
+        log_loss = total_loss.item() / num_samples
+    return acc, log_loss, y_true, y_pred            
 
 model = ViT()
-# out = model(x)
-# print(out)
-loss_fn = nn.CrossEntropyLoss()
+out = model(x)
+print(out)
+print(summary(ViT(), (3, 224, 224), device='cpu'))
+#loss_fn = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Device being used: ", device)
 model.to(device)
 
-# Training loop
-num_epochs = 10
-print("Loading in Data")
-train_dataloader = return_data()
-print("Successfully Loaded In Data")
+# # Training loop
+# num_epochs = 10
+# print("Loading in Data")
+# train_dataloader = return_data()
+# print("Successfully Loaded In Data")
 
-for epoch in range(num_epochs):
-    print("Beginning Training")
-    running_loss = 0.0
-    for images, labels in train_dataloader:
-        images = images.to(device)
-        labels = labels.to(device)
+# for epoch in range(num_epochs):
+#     print("Beginning Training")
+#     running_loss = 0.0
+#     for images, labels in train_dataloader:
+#         images = images.to(device)
+#         labels = labels.to(device)
 
-        # Zero the parameter gradients
-        optimizer.zero_grad()
+#         # Zero the parameter gradients
+#         optimizer.zero_grad()
 
-        # Forward pass
-        outputs = model(images)
+#         # Forward pass
+#         outputs = model(images)
+#         # Compute the loss
+#         #loss = loss_fn(torch.sigmoid(outputs), labels)
+#         loss = F.binary_cross_entropy(torch.sigmoid(outputs), labels, reduction='mean')
+#         # Backward pass and optimization
+#         loss.backward()
+#         optimizer.step()
 
-        # Compute the loss
-        loss = loss_fn(outputs, labels)
+#         # Update the running loss
+#         running_loss += loss.item()
 
-        # Backward pass and optimization
-        loss.backward()
-        optimizer.step()
+#     # Print the average loss for the epoch
+#     epoch_loss = running_loss / len(train_dataloader)
+#     print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")
+#     acc, log_loss, _, _ = eval_model(model, train_dataloader, device, None, None)
+#     print('Training accuracy = ' , 100 * acc) # official log loss score
 
-        # Update the running loss
-        running_loss += loss.item()
 
-    # Print the average loss for the epoch
-    epoch_loss = running_loss / len(train_dataloader)
-    print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")

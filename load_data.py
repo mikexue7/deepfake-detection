@@ -101,7 +101,7 @@ def load_data_and_labels(directory, num_samples):
     return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
 
 def return_data():
-    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 10)
+    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 2000)
     print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}")
     train_dataset = DeepfakeImageDataset(train_data, train_labels)
     train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
