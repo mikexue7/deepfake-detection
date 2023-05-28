@@ -19,8 +19,6 @@ def flatten(x):
     return x.view(N, -1)  # "flatten" the C * H * W values into a single vector per image
 
 def train(model, optimizer, loader_train, loader_val, device, epochs, preprocess_fn=None, postprocess_fn=None):
-    model = model.to(device=device)  # move the model parameters to CPU/GPU
-    
     train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
     val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
     print('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
