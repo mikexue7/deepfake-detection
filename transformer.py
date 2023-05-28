@@ -139,9 +139,9 @@ class ViT(nn.Sequential):
     def __init__(self,     
                 in_channels: int = 3,
                 patch_size: int = 16,
-                emb_size: int = 256,
+                emb_size: int = 512,
                 img_size: int = 224,
-                depth: int = 6,
+                depth: int = 12,
                 n_classes: int = 1,
                 **kwargs):
         super().__init__(
