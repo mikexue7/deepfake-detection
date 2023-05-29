@@ -47,7 +47,8 @@ def load_data_and_labels(directory, num_samples, device):
         filepath = os.path.join(fake_dir, file)
         img = cv2.imread(filepath)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # change to RGB
-        extracted_face = mtcnn(Image.fromarray(img)) # img here must have channels as last dim; note there are bugs that come up when processing in batches
+        img = Image.fromarray(img)
+        extracted_face = mtcnn(img) # img here must have channels as last dim; note there are bugs that come up when processing in batches
         if extracted_face is None: # no face detected
             continue
         data.append(extracted_face.unsqueeze(dim=0)) # extracted face already a FloatTensor
@@ -61,6 +62,7 @@ def load_data_and_labels(directory, num_samples, device):
         filepath = os.path.join(real_dir, file)
         img = cv2.imread(filepath)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # change to RGB
+        img = Image.fromarray(img)
         extracted_face = mtcnn(img) # img here must have channels as last dim
         if extracted_face is None: # no face detected
             continue
@@ -93,7 +95,7 @@ if __name__ == '__main__':
     print(f"Number of model parameters: {total_params}")
     optimizer = optim.Adam(resnet.parameters(), lr=1e-5, weight_decay=0.001)
 
-    best_model_state_dict = train(model, optimizer, train_dataloader, val_dataloader, device, epochs=10)
+    _, best_model_state_dict = train(model, optimizer, train_dataloader, val_dataloader, device, epochs=10)
     model.load_state_dict(best_model_state_dict)
 
     # evaluate on test set
