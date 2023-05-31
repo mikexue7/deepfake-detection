@@ -13,13 +13,13 @@ import os
 import cv2
 from utils import train, eval_model
 import pdb
-
+from pytorch_pretrained_vit import ViT
 
 import argparse
 
 # in this module, we want to further pretrain a resnet on our deepfake image dataset
-PATH_TO_TRAIN_IMAGES = "pretrain_images/train/"
-PATH_TO_VAL_IMAGES = "pretrain_images/val/"
+PATH_TO_TRAIN_IMAGES = "Train/"
+PATH_TO_VAL_IMAGES = "Validation/"
 PATH_TO_TEST_IMAGES = "pretrain_images/test/"
 
 
@@ -40,9 +40,9 @@ def load_data_and_labels(directory, num_samples, device):
     data = []
     labels = []
 
-    fake_dir = os.path.join(directory, "fake/")
-    real_dir = os.path.join(directory, "real/")
-
+    fake_dir = os.path.join(directory, "Fake/")
+    real_dir = os.path.join(directory, "Real/")
+    print("Gathering Data")
     # 160 is default value for passing into resnet after, post_process normalizes input, select_largest=False chooses face with highest prob rather than largest
     mtcnn = MTCNN(image_size=160, post_process=True, select_largest=False, device=device)
 
@@ -59,7 +59,7 @@ def load_data_and_labels(directory, num_samples, device):
             continue
         data.append(extracted_face.unsqueeze(dim=0)) # extracted face already a FloatTensor
         labels.append(1)
-        if (i + 1) % 1000 == 0:
+        if (i + 1) % 100 == 0:
             print(f"Loaded {i + 1} fake images")
     # load real images; note we don't need to shuffle here, dataloader will take care of it during training
     for i, file in enumerate(os.listdir(real_dir)):
@@ -74,7 +74,7 @@ def load_data_and_labels(directory, num_samples, device):
             continue
         data.append(extracted_face.unsqueeze(dim=0)) # extracted face already a FloatTensor
         labels.append(0)
-        if (i + 1) % 1000 == 0:
+        if (i + 1) % 100 == 0:
             print(f"Loaded {i + 1} real images")
     
     return torch.cat(data, dim=0), torch.tensor(labels, dtype=torch.float32).unsqueeze(dim=1)
@@ -84,24 +84,30 @@ if __name__ == '__main__':
     parser.add_argument('--save_path', type=str, required=True, help='path to save pretrained CNN')
     args = parser.parse_args()
 
-    device = torch.device('cuda')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 25000, device)
-    print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}")
+    train_data, train_labels = load_data_and_labels(PATH_TO_TRAIN_IMAGES, 500, device) # change num training images from fake + real
+    print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}") 
     train_dataset = DeepfakeImageDataset(train_data, train_labels)
     train_dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
-    val_data, val_labels = load_data_and_labels(PATH_TO_VAL_IMAGES, 5000, device)
+    val_data, val_labels = load_data_and_labels(PATH_TO_VAL_IMAGES, 100, device) # change num val images
     val_dataset = DeepfakeImageDataset(val_data, val_labels)
     val_dataloader = DataLoader(val_dataset, batch_size=128, shuffle=True)
 
-    resnet = InceptionResnetV1(pretrained='vggface2') # pretrained facial recognition model
-    model = nn.Sequential(resnet, nn.Linear(512, 128), nn.ReLU(), nn.Linear(128, 1)).to(device)
-    total_params = sum(param.numel() for param in resnet.parameters())
+    ViT = ViT('B_16_imagenet1k', pretrained=True, image_size=160) # pretrained ImageNet Model 
+    model = nn.Sequential(
+    ViT,
+    nn.Linear(1000,128),
+    nn.ReLU(),
+    nn.Linear(128,1)
+    ).to(device) 
+    total_params = sum(param.numel() for param in ViT.parameters())
     print(f"Number of model parameters: {total_params}")
-    optimizer = optim.Adam(resnet.parameters(), lr=1e-5, weight_decay=0.001)
+    optimizer = optim.Adam(ViT.parameters(), lr=1e-5, weight_decay=0.001)
 
-    _, best_model_state_dict = train(model, optimizer, train_dataloader, val_dataloader, device, epochs=10)
+    loss_fn = nn.BCELoss()
+    _, best_model_state_dict = train(model, optimizer,loss_fn ,train_dataloader, val_dataloader, device, epochs=10)
     model.load_state_dict(best_model_state_dict)
 
     # evaluate on test set
@@ -112,9 +118,3 @@ if __name__ == '__main__':
     print("Test accuracy = %.4f, log loss = %.4f" % (100 * test_acc, test_loss))
 
     torch.save(best_model_state_dict, args.save_path)
-
-
-# Load ViT
-from pytorch_pretrained_vit import ViT
-model = ViT('B_16_imagenet1k', pretrained=True)
-print("Model Loaded")

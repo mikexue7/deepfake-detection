@@ -30,8 +30,10 @@ def train(model, optimizer, loss_fn, loader_train, loader_val, device, epochs, p
             if preprocess_fn:
                 x, y = preprocess_fn(x, y)
             scores = model(x)
-            loss = loss_fn(scores, y)
-            # loss = F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='mean') # average BCE loss per frame (for FBF model)
+            #loss = loss_fn(F.softmax(scores), y)
+            #print("Scores: ", scores)
+            
+            loss = F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='mean') # average BCE loss per frame (for FBF model)
 
             # Zero out all of the gradients for the variables which the optimizer
             # will update.
@@ -44,7 +46,7 @@ def train(model, optimizer, loss_fn, loader_train, loader_val, device, epochs, p
             # Actually update the parameters of the model using the gradients
             # computed by the backwards pass.
             optimizer.step()
-            
+            print("Model Updated")
             if (t + 1) % 2 == 0:
                 print('Iteration %d, loss = %.4f' % (t + 1, loss.item())) # generic loss, can differ between models based on preprocessing
                 
