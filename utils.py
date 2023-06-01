@@ -11,7 +11,7 @@ def flatten(x):
     N = x.shape[0] # read in N, C, H, W
     return x.view(N, -1)  # "flatten" the C * H * W values into a single vector per image
 
-def train(model, optimizer, loss_fn, loader_train, loader_val, device, epochs, preprocess_fn=None, postprocess_fn=None):
+def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs, preprocess_fn=None, postprocess_fn=None):
     train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
     val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
     print('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
@@ -30,7 +30,9 @@ def train(model, optimizer, loss_fn, loader_train, loader_val, device, epochs, p
             if preprocess_fn:
                 x, y = preprocess_fn(x, y)
             scores = model(x)
-            loss = loss_fn(scores, y)
+            # loss = loss_fn(scores, y)
+            weight = torch.tensor([1 / pos_weight if target == 0 else 1 for target in y]).unsqueeze(1).to(device)
+            loss = F.binary_cross_entropy_with_logits(scores, y, weight=weight)
             # loss = F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='mean') # average BCE loss per frame (for FBF model)
 
             # Zero out all of the gradients for the variables which the optimizer
