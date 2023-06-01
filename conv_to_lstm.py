@@ -20,12 +20,12 @@ class ConvToLSTM(nn.Module):
         frame_features = []
         for i in range(self.num_frames):
             frame = x[:, i, :, :, :]
-            frame_features.append(self.pretrained_model(frame))
+            frame_features.append(self.pretrained_model(frame).unsqueeze(dim=1))
         
         frame_features = torch.cat(frame_features, dim=1) # (N, T, E)
         _, (h_n, _) = self.lstm(frame_features)
 
-        x = h_n
+        x = h_n[-1] # just use last layer's last hidden state
         for fc_layer in self.fc_layers[:-1]:
             x = F.relu(fc_layer(x))
         score = self.fc_layers[-1](x)

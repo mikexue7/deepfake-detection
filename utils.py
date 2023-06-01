@@ -17,11 +17,11 @@ def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs
     print('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
     print('Before training: validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
     
-    model.train() # put model to training mode
     best_val = 0
     best_model_state_dict = None
     
     for e in range(epochs):
+        model.train() # put model to training mode
         print(f"Begin training for epoch {e + 1}")
         for t, (x, y) in enumerate(loader_train):
             x = x.to(device=device)  # move to device, e.g. GPU

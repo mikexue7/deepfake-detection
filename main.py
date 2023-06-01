@@ -24,12 +24,15 @@ from facenet_pytorch import InceptionResnetV1, MTCNN
 from PIL import Image
 from early_fusion import EarlyFusion
 from late_fusion import LateFusion
+from conv_to_lstm import ConvToLSTM
 
 TRAIN_DATA_DIRECTORY = "./dfdc_train_part_"
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
-VIDEOS_PROCESS_AT_ONCE = 400
+VIDEOS_PROCESS_AT_ONCE = 600
 TRAIN_VAL_TEST_SPLIT = [0.7, 0.15, 0.15]
 EMBEDDING_SIZE = 512
+NUM_FOLDERS = 50
+MAX_NUM_FRAMES = 60
 
 class DeepfakeDataset(Dataset):
     def __init__(self, videos, labels):
@@ -85,6 +88,7 @@ def load_data_and_labels(files, metadata, face_detector):
             frames = load_frames(filepath, fr_downsample_factor=5, face_detector=face_detector)
             files_kept.append(os.path.basename(filepath))
             # we will need to pad these later before passing into models, unless each video is same length, which seems to be the case
+            frames = frames[:MAX_NUM_FRAMES]
             data.append(frames)
             print("{}/{} files loaded".format(i + 1, len(files)))
         except:
@@ -110,12 +114,12 @@ if __name__ == '__main__':
     num_val = int(num_videos * TRAIN_VAL_TEST_SPLIT[1])
     num_test = int(num_videos * TRAIN_VAL_TEST_SPLIT[2])
 
-    files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}", file) for i in range(5) for file in os.listdir(TRAIN_DATA_DIRECTORY + f"{i}/") if file.endswith('.mp4')]
+    files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}", file) for i in range(NUM_FOLDERS) for file in os.listdir(TRAIN_DATA_DIRECTORY + f"{i}/") if file.endswith('.mp4')]
     random.seed(231)
     random.shuffle(files)
     files = files[:num_videos]
     files_train, files_val, files_test = files[:num_train], files[num_train:num_train + num_val], files[num_train + num_val:] # split training/val/testing by files first, since we cannot fit all the data in memory
-    metadata_files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}/", "metadata.json") for i in range(5)]
+    metadata_files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}/", "metadata.json") for i in range(NUM_FOLDERS)]
     metadata_all = merge_metadata(metadata_files)
     # Create a generator that yields groups of videos at a time
     file_train_groups = (files_train[i:i + VIDEOS_PROCESS_AT_ONCE] for i in range(0, len(files_train), VIDEOS_PROCESS_AT_ONCE))
@@ -153,8 +157,9 @@ if __name__ == '__main__':
                 # freeze resnet
                 for param in resnet.parameters():
                     param.requires_grad = False
+                model = ConvToLSTM(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
                 # model = LateFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
-                model = EarlyFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
+                # model = EarlyFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
                 # model = nn.Sequential(resnet, nn.Linear(512, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 1)).to(device)
                 total_params = sum(param.numel() for param in model.parameters())
                 print(f"Number of model parameters: {total_params}")
@@ -162,7 +167,7 @@ if __name__ == '__main__':
                 # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
             best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5)
-            # best_val_i, best_model_state_dict_i = train(model, optimizer, loss_fn, train_dataloader, val_dataloader, device=device, epochs=5, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
+            # best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
             if best_val_i > best_val:
                 best_val = best_val_i
                 best_model_state_dict = best_model_state_dict_i

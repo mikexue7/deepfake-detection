@@ -8,7 +8,8 @@ class LateFusion(nn.Module):
         self.pretrained_model = pretrained_model
         self.num_frames = num_frames
         self.fc_layers = nn.ModuleList()
-        prev_hidden_size = num_frames * embedding_size
+        # prev_hidden_size = num_frames * embedding_size
+        prev_hidden_size = embedding_size
         for hidden_size in hidden_sizes:
             self.fc_layers.append(nn.Linear(prev_hidden_size, hidden_size))
             prev_hidden_size = hidden_size
@@ -18,9 +19,10 @@ class LateFusion(nn.Module):
         frame_features = []
         for i in range(self.num_frames):
             frame = x[:, i, :, :, :]
-            frame_features.append(self.pretrained_model(frame))
+            frame_features.append(self.pretrained_model(frame).unsqueeze(dim=1))
         
         frame_features = torch.cat(frame_features, dim=1)
+        frame_features = torch.mean(frame_features, dim=1)
         x = frame_features
         for fc_layer in self.fc_layers[:-1]:
             x = F.relu(fc_layer(x))
