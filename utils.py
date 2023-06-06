@@ -180,9 +180,9 @@ def plot_visualizations(y_true, y_pred, y_scores, model_name):
     stats = classification_report(y_true, y_pred)
     logger.info(f"Statistics:\n{stats}")
 
-    cm.set_title(f"Confusion Matrix ({model_name} model)")
+    cm.ax_.set_title(f"Confusion Matrix ({model_name} model)")
     cm.figure_.savefig(f"cm_{model_name}")
-    roc.set_title(f"ROC Curve ({model_name} model)")
+    roc.ax_.set_title(f"ROC Curve ({model_name} model)")
     roc.figure_.savefig(f"roc_{model_name}")
 
 # testing video output
