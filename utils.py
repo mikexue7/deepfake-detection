@@ -6,23 +6,28 @@ import cv2
 import copy
 import pdb
 import json
+import logging
+from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay, roc_curve, auc, classification_report
+import matplotlib.pyplot as plt
 
 def flatten(x):
     N = x.shape[0] # read in N, C, H, W
     return x.view(N, -1)  # "flatten" the C * H * W values into a single vector per image
 
 def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs, preprocess_fn=None, postprocess_fn=None):
-    train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
-    val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
-    print('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
-    print('Before training: validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
+    logger = logging.getLogger(__name__)
+
+    train_acc, train_loss, _, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+    val_acc, val_loss, _, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
+    logger.info('Before training: training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
+    logger.info('Before training: validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
     
     best_val = 0
     best_model_state_dict = None
     
     for e in range(epochs):
         model.train() # put model to training mode
-        print(f"Begin training for epoch {e + 1}")
+        logger.info(f"Begin training for epoch {e + 1}")
         for t, (x, y) in enumerate(loader_train):
             x = x.to(device=device)  # move to device, e.g. GPU
             y = y.to(device=device)
@@ -47,15 +52,15 @@ def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs
             # computed by the backwards pass.
             optimizer.step()
             
-            if (t + 1) % 2 == 0:
-                print('Iteration %d, loss = %.4f' % (t + 1, loss.item())) # generic loss, can differ between models based on preprocessing
+            if (t + 1) % 5 == 0:
+                logger.info('Iteration %d, loss = %.4f' % (t + 1, loss.item())) # generic loss, can differ between models based on preprocessing
                 
-        train_acc, train_loss, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
-        val_acc, val_loss, _, _ = eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
-        print('Training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
-        print('Validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
+        train_acc, train_loss, _, _, _ = eval_model(model, loader_train, device, preprocess_fn, postprocess_fn)
+        val_acc, val_loss, _, _, _= eval_model(model, loader_val, device, preprocess_fn, postprocess_fn)
+        logger.info('Training accuracy = %.4f, log loss = %.4f' % (100 * train_acc, train_loss)) # official log loss score
+        logger.info('Validation accuracy = %.4f, log loss = %.4f' % (100 * val_acc, val_loss)) # official log loss score
 
-        if val_acc > best_val:
+        if val_acc >= best_val: # for now, can change back to >
             best_val = val_acc
             best_model_state_dict = copy.deepcopy(model.state_dict())
     
@@ -64,7 +69,7 @@ def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs
 def eval_model(model, loader, device, preprocess_fn=None, postprocess_fn=None):
     num_correct, num_samples, total_loss = 0, 0, 0
     model.eval()
-    y_true, y_pred = [], []
+    y_true, y_pred, y_scores = [], [], []
     with torch.no_grad():
         for x, y in loader:
             batch_size = x.shape[0]
@@ -83,9 +88,10 @@ def eval_model(model, loader, device, preprocess_fn=None, postprocess_fn=None):
 
             y_true.extend(y.cpu().numpy().flatten())
             y_pred.extend(preds.cpu().numpy().flatten())
+            y_scores.extend(probs.cpu().numpy().flatten())
         acc = float(num_correct) / num_samples
         log_loss = total_loss.item() / num_samples
-    return acc, log_loss, y_true, y_pred
+    return acc, log_loss, y_true, y_pred, y_scores
 
 def extract_faces(image):
     # Load the pre-trained face cascade from OpenCV
@@ -162,6 +168,22 @@ def calc_neg_to_pos_sample_ratio(metadata):
         if label == 'REAL':
             num_neg += 1
     return num_neg / (len(files) - num_neg)
+
+def plot_visualizations(y_true, y_pred, y_scores, model_name):
+    logger = logging.getLogger(__name__)
+    cm = ConfusionMatrixDisplay.from_predictions(y_true, y_pred, cmap='Blues')
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+    roc_auc = auc(fpr, tpr)
+    logger.info(f"FPR values: {fpr}\nTPR values: {tpr}\nThresholds: {thresholds}")
+    logger.info(f"AUC: {roc_auc}")
+    roc = RocCurveDisplay.from_predictions(y_true, y_scores)
+    stats = classification_report(y_true, y_pred)
+    logger.info(f"Statistics:\n{stats}")
+
+    cm.set_title(f"Confusion Matrix ({model_name} model)")
+    cm.figure_.savefig(f"cm_{model_name}")
+    roc.set_title(f"ROC Curve ({model_name} model)")
+    roc.figure_.savefig(f"roc_{model_name}")
 
 # testing video output
 # def write_to_video(frames):

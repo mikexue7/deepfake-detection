@@ -10,16 +10,16 @@ import cv2
 import os
 import json
 import random
-from sklearn.metrics import ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
-# os.environ["IMAGEIO_FFMPEG_EXE"] = "/Users/michaelxue/anaconda3/lib/python3.9/site-packages/ffmpeg/"
-# from moviepy.editor import AudioFileClip
+import multiprocessing
 
 import pdb
 import argparse
+import logging
+import time
 
 from frame_by_frame_model import flatten_videos_and_labels, unflatten_probs_and_labels, FrameByFrameCNN
-from utils import train, eval_model, extract_faces_square, merge_metadata, calc_neg_to_pos_sample_ratio
+from utils import train, eval_model, extract_faces_square, merge_metadata, calc_neg_to_pos_sample_ratio, plot_visualizations
 from facenet_pytorch import InceptionResnetV1, MTCNN
 from PIL import Image
 from early_fusion import EarlyFusion
@@ -83,6 +83,7 @@ def load_data_and_labels(files, metadata, face_detector):
     data = []
     labels = []
     files_kept = []
+
     for i, filepath in enumerate(files):
         try:
             frames = load_frames(filepath, fr_downsample_factor=5, face_detector=face_detector)
@@ -99,22 +100,58 @@ def load_data_and_labels(files, metadata, face_detector):
         label = metadata[file]["label"]
         labels.append(1 if label == 'FAKE' else 0)
     
-    # return torch.cat(data, dim=0)
     return pad_sequence(data, batch_first=True), torch.tensor(labels, dtype=torch.float32).unsqueeze(dim=1)
+
+def load_data_and_labels_multiprocessing(files, metadata, face_detector):
+    # Number of processes to use
+    num_processes = multiprocessing.cpu_count()
+
+    # Calculate the number of files per process
+    files_per_process = len(files) // num_processes
+
+    # Create a pool of worker processes
+    pool = multiprocessing.Pool(processes=num_processes)
+
+    # Use the pool to asynchronously load data from files
+    file_chunks = [files[i:i + files_per_process] for i in range(0, len(files), files_per_process)]
+    results = []
+    for chunk in file_chunks:
+        results.append(pool.apply_async(load_data_and_labels, args=(chunk, metadata, face_detector)))
+    
+    # Get the loaded data from all processes
+    loaded_data = []
+    loaded_labels = []
+    for result in results:
+        data, labels = result.get()
+        loaded_data.extend(data)
+        loaded_labels.extend(labels)
+
+    # Close the pool of worker processes
+    pool.close()
+    pool.join()
+
+    return torch.cat(loaded_data, dim=0), torch.cat(loaded_labels, dim=0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_videos', type=int, default=100,
                         help='number of videos to use in total (training and test)')
+    parser.add_argument('--model', type=str, default='fbf',
+                        help='type of model to use (fbf, early_fusion, late_fusion, lstm, transformer)')
     parser.add_argument('--pretrained_path', type=str,
                         help='path to pretrained model state dict')
+    parser.add_argument('--log_output', type=str,
+                        help='file for output logs')
     args = parser.parse_args()
+    logging.basicConfig(filename=args.log_output, format='%(message)s', level=logging.DEBUG)
+    logger = logging.getLogger(__name__)
+
     num_videos = args.num_videos
     num_train = int(num_videos * TRAIN_VAL_TEST_SPLIT[0])
     num_val = int(num_videos * TRAIN_VAL_TEST_SPLIT[1])
     num_test = int(num_videos * TRAIN_VAL_TEST_SPLIT[2])
 
-    files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}", file) for i in range(NUM_FOLDERS) for file in os.listdir(TRAIN_DATA_DIRECTORY + f"{i}/") if file.endswith('.mp4')]
+    files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}", file) for i in range(NUM_FOLDERS) for file in sorted(os.listdir(TRAIN_DATA_DIRECTORY + f"{i}/")) if file.endswith('.mp4')] # use sorted to make files the same order across runs
     random.seed(231)
     random.shuffle(files)
     files = files[:num_videos]
@@ -123,13 +160,15 @@ if __name__ == '__main__':
     metadata_all = merge_metadata(metadata_files)
     # Create a generator that yields groups of videos at a time
     file_train_groups = (files_train[i:i + VIDEOS_PROCESS_AT_ONCE] for i in range(0, len(files_train), VIDEOS_PROCESS_AT_ONCE))
-    # eventually we'll need one for file_test_groups
+    # eventually we may need one for file_test_groups
 
     # Training
     # Use a loop and next() to get all the groups of videos, train on each set of videos
+    model_name = args.model
+    
     num_iters = 0
     device = torch.device('cuda') # or mps or cpu
-    mtcnn = MTCNN(image_size=160, post_process=True, select_largest=False, device=device)
+    mtcnn = MTCNN(image_size=160, post_process=True, select_largest=False, device=device) # need to use cpu here for multiprocessing
 
     # load val dataset
     val_data, val_labels = load_data_and_labels(files_val, metadata_all, mtcnn)
@@ -139,6 +178,8 @@ if __name__ == '__main__':
     best_val = 0
     best_model_state_dict = None
     pos_weight = torch.tensor([calc_neg_to_pos_sample_ratio(metadata_all)]).to(device)
+
+    start_time = time.time()
     # load training data over time
     while True:
         try:
@@ -157,18 +198,27 @@ if __name__ == '__main__':
                 # freeze resnet
                 for param in resnet.parameters():
                     param.requires_grad = False
-                model = ConvToLSTM(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
-                # model = LateFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
-                # model = EarlyFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
-                # model = nn.Sequential(resnet, nn.Linear(512, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 1)).to(device)
+
+                if model_name == 'fbf':
+                    model = nn.Sequential(resnet, nn.Linear(512, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 1)).to(device)
+                elif model_name == 'early_fusion':
+                    model = EarlyFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
+                elif model_name == 'late_fusion':
+                    model = LateFusion(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
+                elif model_name == 'lstm':
+                    model = ConvToLSTM(resnet, num_frames, EMBEDDING_SIZE, [256, 128]).to(device)
+    
                 total_params = sum(param.numel() for param in model.parameters())
                 print(f"Number of model parameters: {total_params}")
-                optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=0.001)
+                optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=0.001)
                 # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-            best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5)
-            # best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
-            if best_val_i > best_val:
+            if model_name == 'fbf':
+                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
+            else:
+                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5)
+            
+            if best_val_i >= best_val: # for now, can change back to >
                 best_val = best_val_i
                 best_model_state_dict = best_model_state_dict_i
 
@@ -178,14 +228,22 @@ if __name__ == '__main__':
             # Handle the end of the sequence
             break
 
+    end_time = time.time()
+    elapsed_time_hours = (end_time - start_time) / 3600
+
+    logger.info(f"Training took {elapsed_time_hours:.2f} hours")
+
+    del val_data, val_labels, val_dataset, val_dataloader, train_data, train_labels, train_dataset, train_dataloader # free up space
+
     # Evaluation on test set
     test_data, test_labels = load_data_and_labels(files_test, metadata_all, mtcnn)
     test_dataset = DeepfakeDataset(test_data, test_labels)
     test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=True)
     model.load_state_dict(best_model_state_dict) # load best model
-    test_acc, test_loss, y_true, y_pred = eval_model(model, test_dataloader, device=device)
-    # test_acc, test_loss, y_true, y_pred = eval_model(model, test_dataloader, device=device, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
-    print("Test accuracy = %.4f, log loss = %.4f" % (100 * test_acc, test_loss))
+    if model_name == 'fbf':
+        test_acc, test_loss, y_true, y_pred, y_scores = eval_model(model, test_dataloader, device=device, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
+    else:
+        test_acc, test_loss, y_true, y_pred, y_scores = eval_model(model, test_dataloader, device=device)
+    logger.info("Test accuracy = %.4f, log loss = %.4f" % (100 * test_acc, test_loss))
 
-    # cm = ConfusionMatrixDisplay.from_predictions(y_true, y_pred, cmap='Blues')
-    # plt.show()
+    plot_visualizations(y_true, y_pred, y_scores, model_name)

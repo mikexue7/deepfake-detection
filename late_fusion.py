@@ -22,7 +22,7 @@ class LateFusion(nn.Module):
             frame_features.append(self.pretrained_model(frame).unsqueeze(dim=1))
         
         frame_features = torch.cat(frame_features, dim=1)
-        frame_features = torch.mean(frame_features, dim=1)
+        frame_features = torch.mean(frame_features, dim=1) # mean pooling over time
         x = frame_features
         for fc_layer in self.fc_layers[:-1]:
             x = F.relu(fc_layer(x))
