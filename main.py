@@ -19,7 +19,7 @@ import logging
 import time
 
 from frame_by_frame_model import flatten_videos_and_labels, unflatten_probs_and_labels, FrameByFrameCNN
-from utils import train, eval_model, extract_faces_square, merge_metadata, calc_neg_to_pos_sample_ratio, plot_visualizations
+from utils import train, eval_model, extract_faces_square, merge_metadata, balance_dataset, calc_neg_to_pos_sample_ratio, plot_visualizations
 from facenet_pytorch import InceptionResnetV1, MTCNN
 from PIL import Image
 from early_fusion import EarlyFusion
@@ -28,7 +28,7 @@ from conv_to_lstm import ConvToLSTM
 
 TRAIN_DATA_DIRECTORY = "./dfdc_train_part_"
 ASPECT_RATIO = 16 / 9 # 1920 / 1080
-VIDEOS_PROCESS_AT_ONCE = 600
+VIDEOS_PROCESS_AT_ONCE = 500
 TRAIN_VAL_TEST_SPLIT = [0.7, 0.15, 0.15]
 EMBEDDING_SIZE = 512
 NUM_FOLDERS = 50
@@ -72,7 +72,7 @@ def load_frames(filepath, fr_downsample_factor, face_detector):
 
     # in future can extract frame by frame, and if certain frames aren't picked up by detector, can pad with 0s to make all videos same length
     # for now it seems that face detector picks up almost every video completely
-    extracted_face_frames = [frame.unsqueeze(dim=0) for frame in face_detector(frames)] # leads to error if certain frame cannot detect a face
+    extracted_face_frames = [face_detector(frame).unsqueeze(dim=0) for frame in frames] # leads to error if certain frame cannot detect a face
 
     # Release the video file
     cap.release()
@@ -84,6 +84,7 @@ def load_data_and_labels(files, metadata, face_detector):
     labels = []
     files_kept = []
 
+    neg_examples, pos_examples = 0, 0
     for i, filepath in enumerate(files):
         try:
             frames = load_frames(filepath, fr_downsample_factor=5, face_detector=face_detector)
@@ -151,13 +152,15 @@ if __name__ == '__main__':
     num_val = int(num_videos * TRAIN_VAL_TEST_SPLIT[1])
     num_test = int(num_videos * TRAIN_VAL_TEST_SPLIT[2])
 
+    metadata_files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}/", "metadata.json") for i in range(NUM_FOLDERS)]
+    metadata_all = merge_metadata(metadata_files)
+
     files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}", file) for i in range(NUM_FOLDERS) for file in sorted(os.listdir(TRAIN_DATA_DIRECTORY + f"{i}/")) if file.endswith('.mp4')] # use sorted to make files the same order across runs
+    files = balance_dataset(files, metadata_all)
     random.seed(231)
     random.shuffle(files)
     files = files[:num_videos]
     files_train, files_val, files_test = files[:num_train], files[num_train:num_train + num_val], files[num_train + num_val:] # split training/val/testing by files first, since we cannot fit all the data in memory
-    metadata_files = [os.path.join(TRAIN_DATA_DIRECTORY + f"{i}/", "metadata.json") for i in range(NUM_FOLDERS)]
-    metadata_all = merge_metadata(metadata_files)
     # Create a generator that yields groups of videos at a time
     file_train_groups = (files_train[i:i + VIDEOS_PROCESS_AT_ONCE] for i in range(0, len(files_train), VIDEOS_PROCESS_AT_ONCE))
     # eventually we may need one for file_test_groups
@@ -173,11 +176,12 @@ if __name__ == '__main__':
     # load val dataset
     val_data, val_labels = load_data_and_labels(files_val, metadata_all, mtcnn)
     val_dataset = DeepfakeDataset(val_data, val_labels)
-    val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=16, shuffle=True)
 
     best_val = 0
     best_model_state_dict = None
     pos_weight = torch.tensor([calc_neg_to_pos_sample_ratio(metadata_all)]).to(device)
+    print(f"Ratio of negative to positive samples: {pos_weight.item():.2f}")
 
     start_time = time.time()
     # load training data over time
@@ -187,17 +191,18 @@ if __name__ == '__main__':
             train_data, train_labels = load_data_and_labels(curr_files, metadata_all, mtcnn)
             print(f"Input has shape {train_data.shape}, labels have shape {train_labels.shape}")
             train_dataset = DeepfakeDataset(train_data, train_labels)
-            train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+            train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 
             num_frames = train_data.shape[1]
 
             # initialize model and optimizer, then train
             if num_iters == 0:
                 resnet = InceptionResnetV1(pretrained='vggface2') # pretrained facial recognition model
-                resnet.load_state_dict(torch.load(args.pretrained_path), strict=False) # only load resnet part of model
-                # freeze resnet
-                for param in resnet.parameters():
-                    param.requires_grad = False
+                if args.pretrained_path:
+                    resnet.load_state_dict(torch.load(args.pretrained_path), strict=False) # only load resnet part of model
+                    # freeze resnet
+                    for param in resnet.parameters():
+                        param.requires_grad = False
 
                 if model_name == 'fbf':
                     model = nn.Sequential(resnet, nn.Linear(512, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 1)).to(device)
@@ -210,19 +215,20 @@ if __name__ == '__main__':
     
                 total_params = sum(param.numel() for param in model.parameters())
                 print(f"Number of model parameters: {total_params}")
-                optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=0.001)
+                optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=0.001)
                 # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
             if model_name == 'fbf':
-                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
+                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=10, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)
             else:
-                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=5)
+                best_val_i, best_model_state_dict_i = train(model, optimizer, pos_weight, train_dataloader, val_dataloader, device=device, epochs=10)
             
             if best_val_i >= best_val: # for now, can change back to >
                 best_val = best_val_i
                 best_model_state_dict = best_model_state_dict_i
 
             num_iters += 1
+            del train_data, train_labels, train_dataset, train_dataloader # free up space
 
         except StopIteration:
             # Handle the end of the sequence
@@ -233,12 +239,12 @@ if __name__ == '__main__':
 
     logger.info(f"Training took {elapsed_time_hours:.2f} hours")
 
-    del val_data, val_labels, val_dataset, val_dataloader, train_data, train_labels, train_dataset, train_dataloader # free up space
+    del val_data, val_labels, val_dataset, val_dataloader # free up space
 
     # Evaluation on test set
     test_data, test_labels = load_data_and_labels(files_test, metadata_all, mtcnn)
     test_dataset = DeepfakeDataset(test_data, test_labels)
-    test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True)
     model.load_state_dict(best_model_state_dict) # load best model
     if model_name == 'fbf':
         test_acc, test_loss, y_true, y_pred, y_scores = eval_model(model, test_dataloader, device=device, preprocess_fn=flatten_videos_and_labels, postprocess_fn=unflatten_probs_and_labels)

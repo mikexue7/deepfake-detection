@@ -9,6 +9,8 @@ import json
 import logging
 from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay, roc_curve, auc, classification_report
 import matplotlib.pyplot as plt
+import random
+import os
 
 def flatten(x):
     N = x.shape[0] # read in N, C, H, W
@@ -36,8 +38,8 @@ def train(model, optimizer, pos_weight, loader_train, loader_val, device, epochs
                 x, y = preprocess_fn(x, y)
             scores = model(x)
             # loss = loss_fn(scores, y)
-            weight = torch.tensor([1 / pos_weight if target == 0 else 1 for target in y]).unsqueeze(1).to(device)
-            loss = F.binary_cross_entropy_with_logits(scores, y, weight=weight)
+            # weight = torch.tensor([1 / pos_weight if target == 0 else 1 for target in y]).unsqueeze(1).to(device)
+            loss = F.binary_cross_entropy_with_logits(scores, y) #, weight=weight)
             # loss = F.binary_cross_entropy(torch.sigmoid(scores), y, reduction='mean') # average BCE loss per frame (for FBF model)
 
             # Zero out all of the gradients for the variables which the optimizer
@@ -144,6 +146,13 @@ def extract_faces_square(image, dimension):
         extracted_faces.append(face)
 
     return extracted_faces
+
+def balance_dataset(files, metadata):
+    random.seed(231)
+    files_fake = [file for file in files if metadata[os.path.basename(file)]['label'] == 'FAKE']
+    files_true = [file for file in files if metadata[os.path.basename(file)]['label'] == 'REAL']
+    files_fake_kept = random.sample(files_fake, len(files_true))
+    return files_fake_kept + files_true
 
 def merge_metadata(metadata_paths):
     # Create an empty dictionary to hold the merged data
